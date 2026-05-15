@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PIX Automático</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;font-family:Arial,sans-serif}
+    body{min-height:100vh;background:#0f172a;color:#fff;display:flex;align-items:center;justify-content:center;padding:20px}
+    .card{width:100%;max-width:540px;background:#111827;border-radius:22px;padding:28px;box-shadow:0 20px 50px rgba(0,0,0,.35)}
+    h1{text-align:center;color:#86efac;margin-bottom:8px}
+    .sub{text-align:center;color:#cbd5e1;margin-bottom:22px;font-size:14px}
+    label{display:block;margin:14px 0 7px;color:#cbd5e1;font-size:14px}
+    input{width:100%;border:0;border-radius:12px;background:#1f2937;color:#fff;padding:14px;font-size:15px;outline:none}
+    button{width:100%;margin-top:16px;border:0;border-radius:12px;padding:15px;font-weight:700;font-size:16px;cursor:pointer;background:#22c55e;color:#052e16}
+    button:hover{filter:brightness(.95)}
+    button.secondary{background:#3b82f6;color:#fff}
+    button.test{background:#f59e0b;color:#111827}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .qr{display:none;margin-top:22px;background:#fff;border-radius:16px;padding:18px;text-align:center}
+    .qr img{max-width:260px;width:100%}
+    .code{display:none;margin-top:14px;background:#1f2937;border-radius:12px;padding:14px;word-break:break-all;color:#e5e7eb;font-size:13px}
+    .status{display:none;margin-top:16px;text-align:center;border-radius:12px;padding:14px;background:#1f2937;color:#fbbf24;font-weight:bold}
+    .status.paid{background:#052e16;color:#86efac}
+    .success-box{display:none;margin-top:16px;border-radius:14px;background:#052e16;border:1px solid #16a34a;padding:18px;text-align:center}
+    .small{font-size:12px;color:#94a3b8;text-align:center;margin-top:16px;line-height:1.4}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>PIX Automático</h1>
+    <p class="sub">Gere o QR Code e libere automaticamente após o pagamento.</p>
+
+    <label>Valor em R$</label>
+    <input id="amount" type="number" step="0.01" value="5.00" placeholder="Ex: 5.00" />
+
+    <label>Descrição</label>
+    <input id="description" value="Pagamento do site" maxlength="37" />
+
+    <button id="createBtn" onclick="createPix()">Gerar PIX QR Code</button>
+
+    <div class="qr" id="qrBox">
+      <img id="qrImage" alt="QR Code PIX" />
+    </div>
+
+    <div class="code" id="pixCode"></div>
+
+    <button class="secondary" id="copyBtn" style="display:none" onclick="copyPix()">Copiar código PIX</button>
+    <button class="test" id="simulateBtn" style="display:none" onclick="simulatePayment()">Simular pagamento Sandbox</button>
+
+    <div class="status" id="statusBox">Aguardando pagamento...</div>
+
+    <div class="success-box" id="successBox">
+      <h2>Pagamento aprovado!</h2>
+      <p>Conteúdo liberado automaticamente.</p>
+    </div>
+
+    <p class="small">
+      No Sandbox, use o botão de simular pagamento. Em produção, o cliente paga pelo app do banco.
+    </p>
+  </div>
+
+<script>
+let currentPaymentId = null;
+let currentBrCode = "";
+let timer = null;
+
+async function createPix(){
+  const amount = document.getElementById("amount").value;
+  const description = document.getElementById("description").value;
+  const btn = document.getElementById("createBtn");
+
+  btn.disabled = true;
+  btn.textContent = "Gerando PIX...";
+
+  document.getElementById("successBox").style.display = "none";
+  document.getElementById("statusBox").className = "status";
+  document.getElementById("statusBox").textContent = "Aguardando pagamento...";
+
+  try{
+    const res = await fetch("/api/create-pix", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ amount, description })
+    });
+
+    const data = await res.json();
+
+    if(!res.ok){
+      throw new Error(data.error || "Erro ao gerar PIX");
+    }
+
+    currentPaymentId = data.id;
+    currentBrCode = data.brCode;
+
+    document.getElementById("qrImage").src = data.brCodeBase64;
+    document.getElementById("qrBox").style.display = "block";
+    document.getElementById("pixCode").style.display = "block";
+    document.getElementById("pixCode").textContent = data.brCode;
+    document.getElementById("copyBtn").style.display = "block";
+    document.getElementById("simulateBtn").style.display = data.devMode ? "block" : "none";
+    document.getElementById("statusBox").style.display = "block";
+
+    startChecking();
+  }catch(err){
+    alert(err.message);
+  }finally{
+    btn.disabled = false;
+    btn.textContent = "Gerar PIX QR Code";
+  }
+}
+
+function startChecking(){
+  if(timer) clearInterval(timer);
+  timer = setInterval(checkPayment, 3000);
+  checkPayment();
+}
+
+async function checkPayment(){
+  if(!currentPaymentId) return;
+
+  try{
+    const res = await fetch("/api/check/" + currentPaymentId);
+    const data = await res.json();
+
+    if(data.status === "PAID"){
+      clearInterval(timer);
+      document.getElementById("statusBox").className = "status paid";
+      document.getElementById("statusBox").textContent = "Pagamento confirmado!";
+      document.getElementById("successBox").style.display = "block";
+    }else if(data.status === "EXPIRED"){
+      clearInterval(timer);
+      document.getElementById("statusBox").textContent = "QR Code expirado. Gere outro PIX.";
+    }else{
+      document.getElementById("statusBox").textContent = "Aguardando pagamento...";
+    }
+  }catch(err){
+    console.log(err);
+  }
+}
+
+async function simulatePayment(){
+  if(!currentPaymentId) return;
+
+  const btn = document.getElementById("simulateBtn");
+  btn.disabled = true;
+  btn.textContent = "Simulando...";
+
+  try{
+    const res = await fetch("/api/simulate/" + currentPaymentId, { method:"POST" });
+    const data = await res.json();
+
+    if(!res.ok){
+      throw new Error(data.error || "Erro ao simular pagamento");
+    }
+
+    await checkPayment();
+  }catch(err){
+    alert(err.message);
+  }finally{
+    btn.disabled = false;
+    btn.textContent = "Simular pagamento Sandbox";
+  }
+}
+
+function copyPix(){
+  navigator.clipboard.writeText(currentBrCode);
+  alert("Código PIX copiado!");
+}
+</script>
+</body>
+</html>
